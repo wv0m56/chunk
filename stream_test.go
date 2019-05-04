@@ -2,6 +2,8 @@ package chunk
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -59,6 +61,52 @@ func TestStream(t *testing.T) {
 	sum224, err = s.Sum224()
 	assert.Nil(t, err)
 	assert.Equal(t, sha224bin("testdata/all"), sum224.String())
+
+	// check if finished and what error encountered
+	fin, err := s.Err()
+	assert.True(t, fin)
+	assert.Nil(t, err)
+}
+
+func TestTimeout(t *testing.T) {
+	pr, _ := dummyPipe()
+	s := ProcessStream(pr, 100, 100, 500*time.Millisecond)
+
+	fin, _ := s.Err()
+	assert.False(t, fin)
+
+	for {
+		if c := s.Next(); c == nil {
+			break
+		}
+	}
+
+	fin, err := s.Err()
+	assert.True(t, fin)
+	assert.Equal(t, "context deadline exceeded", err.Error())
+}
+
+func TestStreamError(t *testing.T) {
+	pr, pw := dummyPipe()
+	s := ProcessStream(pr, 10, 100, 100*time.Second)
+
+	fin, _ := s.Err()
+	assert.False(t, fin)
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		pw.CloseWithError(errors.New("some error"))
+	}()
+
+	for {
+		if c := s.Next(); c == nil {
+			break
+		}
+	}
+
+	fin, err := s.Err()
+	assert.True(t, fin)
+	assert.Equal(t, "some error", err.Error())
 }
 
 func sha224bin(path string) string {
@@ -70,4 +118,18 @@ func sha224bin(path string) string {
 		panic(err)
 	}
 	return strings.Split(string(buf.Bytes()), "  ")[0]
+}
+
+func dummyPipe() (*io.PipeReader, *io.PipeWriter) {
+	pr, pw := io.Pipe()
+
+	// simulate a slow, endless stream
+	go func() {
+		for {
+			time.Sleep(10 * time.Millisecond)
+			pw.Write([]byte("beep beep"))
+		}
+	}()
+
+	return pr, pw
 }

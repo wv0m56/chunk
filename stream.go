@@ -47,6 +47,17 @@ func (s *Sequence) Width() int64 {
 	return s.w
 }
 
+// Err returns any error encountered when processing the input stream
+// if finished==true.
+// If finished==false, err is undefined.
+func (s *Sequence) Err() (finished bool, err error) {
+	s.mu.Lock()
+	finished = s.fin
+	err = s.err
+	s.mu.Unlock()
+	return
+}
+
 func (s *Sequence) doneWith(err error) {
 	s.mu.Lock()
 	s.fin = true
