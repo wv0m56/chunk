@@ -15,31 +15,17 @@ import (
 type Sequence struct {
 	c    chan *C
 	w    int64
-	err  chan error
 	h224 hash.Hash
 
 	mu  sync.Mutex // guards below
 	fin bool
+	err error
 }
 
 // Next returns the next data chunk if any.
-// If s has finished consuming from the input io.Reader, then
-// fin==true and err captures the error encountered when processing
-// the input stream.
-// If lastChunk==false, err is undefined.
-// Calling Next again after the call that returns fin==true yields undefined
-// return values.
-func (s *Sequence) Next() (c *C, lastChunk bool, err error) {
-	select {
-	case c = <-s.c:
-		return
-	case err = <-s.err:
-		lastChunk = true
-		s.mu.Lock()
-		s.fin = true
-		s.mu.Unlock()
-		return
-	}
+// If s has finished consuming from the input io.Reader, the returned chunk is nil.
+func (s *Sequence) Next() *C {
+	return <-s.c
 }
 
 // Sum224 checks whether the processing of the input stream is finished.
@@ -54,6 +40,18 @@ func (s *Sequence) Sum224() (Sum224, error) {
 	var res Sum224
 	copy(res[:], s.h224.Sum(nil))
 	return res, nil
+}
+
+// Width returns the width of each chunk except the last.
+func (s *Sequence) Width() int64 {
+	return s.w
+}
+
+func (s *Sequence) doneWith(err error) {
+	s.mu.Lock()
+	s.fin = true
+	s.err = err
+	s.mu.Unlock()
 }
 
 // ProcessStream cuts up an input stream r into smaller chunks of width w bytes.
@@ -71,10 +69,10 @@ func ProcessStream(r io.Reader, w int64, bufSize int, timeout time.Duration) *Se
 	s := &Sequence{
 		make(chan *C, bufSize),
 		w,
-		make(chan error),
 		sha256.New224(),
 		sync.Mutex{},
 		false,
+		nil,
 	}
 
 	go func() {
@@ -87,24 +85,29 @@ func ProcessStream(r io.Reader, w int64, bufSize int, timeout time.Duration) *Se
 			select {
 
 			case <-ctx.Done():
-				s.err <- ctx.Err()
+				s.doneWith(ctx.Err())
+				return
 
 			default:
 				chunk := bytes.NewBuffer(nil)
 				h := sha256.New224()
 				mw := io.MultiWriter(s.h224, chunk, h)
 
-				_, err := io.CopyN(mw, r, w)
+				n, err := io.CopyN(mw, r, w)
 				if err != nil {
-
-					// last chunk
-					if err == io.EOF {
-						s.c <- &C{chunk.Bytes(), h}
-						s.err <- nil
+					if err == io.EOF { // last chunk
+						if n > 0 {
+							s.c <- &C{chunk.Bytes(), h}
+						}
+						s.doneWith(nil)
 					} else {
-						s.err <- err
+						s.doneWith(err)
 					}
+
+					return
 				}
+
+				s.c <- &C{chunk.Bytes(), h}
 			}
 		}
 	}()
