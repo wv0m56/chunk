@@ -11,15 +11,20 @@ import (
 	"time"
 )
 
+var (
+	errInputStreamStillRunning = errors.New("input stream still running")
+)
+
 // Sequence represents a sliced up io.Reader into a sequence of smaller chunks.
 type Sequence struct {
 	c    chan *C
 	w    int64
 	h224 hash.Hash
 
-	mu  sync.Mutex // guards below
-	fin bool
-	err error
+	mu        sync.Mutex // guards below
+	fin       bool
+	err       error
+	chunks224 []hash.Hash
 }
 
 // Next returns the next data chunk if any.
@@ -35,16 +40,33 @@ func (s *Sequence) Sum224() (Sum224, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.fin {
-		return Sum224{}, errors.New("called Sum224 when input stream is still running")
+		return Sum224{}, errInputStreamStillRunning
 	}
 	var res Sum224
 	copy(res[:], s.h224.Sum(nil))
 	return res, nil
 }
 
-// Width returns the width of each chunk except the last.
-func (s *Sequence) Width() int64 {
-	return s.w
+// Metadata returns the metadata required to reconstruct the original file.
+// Must only be called after the input stream has stopped, otherwise an error
+// is returned.
+func (s *Sequence) Metadata() (*Metadata, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.fin {
+		return nil, errInputStreamStillRunning
+	}
+
+	m := &Metadata{}
+	copy(m.TopChecksum[:], s.h224.Sum(nil))
+	for _, v := range s.chunks224 {
+		var tmp Sum224
+		copy(tmp[:], v.Sum(nil))
+		m.ChunkChecksums = append(m.ChunkChecksums, tmp)
+	}
+	m.Width = s.w
+
+	return m, nil
 }
 
 // Err returns any error encountered when processing the input stream
@@ -84,6 +106,7 @@ func SplitStream(r io.Reader, w int64, bufSize int, timeout time.Duration) *Sequ
 		sync.Mutex{},
 		false,
 		nil,
+		nil,
 	}
 
 	go func() {
@@ -109,6 +132,7 @@ func SplitStream(r io.Reader, w int64, bufSize int, timeout time.Duration) *Sequ
 					if err == io.EOF { // last chunk
 						if n > 0 {
 							s.c <- &C{chunk.Bytes(), h}
+							s.chunks224 = append(s.chunks224, h)
 						}
 						s.doneWith(nil)
 					} else {
@@ -119,6 +143,7 @@ func SplitStream(r io.Reader, w int64, bufSize int, timeout time.Duration) *Sequ
 				}
 
 				s.c <- &C{chunk.Bytes(), h}
+				s.chunks224 = append(s.chunks224, h)
 			}
 		}
 	}()

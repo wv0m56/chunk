@@ -36,6 +36,10 @@ func TestStream(t *testing.T) {
 	_, err = s.Sum224()
 	assert.NotNil(t, err)
 
+	// check metadata mid stream
+	_, err = s.Metadata()
+	assert.NotNil(t, err)
+
 	// 3
 	c = s.Next()
 	assert.Equal(t, sha224bin("testdata/chunk3"), c.Sum224().String())
@@ -66,6 +70,12 @@ func TestStream(t *testing.T) {
 	fin, err := s.Err()
 	assert.True(t, fin)
 	assert.Nil(t, err)
+
+	m, err := s.Metadata()
+	assert.Nil(t, err)
+	assert.Equal(t, sha224bin("testdata/all"), m.TopChecksum.String())
+	assert.Equal(t, 5, len(m.ChunkChecksums))
+	assert.Equal(t, sha224bin("testdata/chunk5"), m.ChunkChecksums[4].String())
 }
 
 func TestEdgeCases(t *testing.T) {
