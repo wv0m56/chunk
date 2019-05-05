@@ -65,13 +65,13 @@ func (s *Sequence) doneWith(err error) {
 	s.mu.Unlock()
 }
 
-// ProcessStream cuts up an input stream r into smaller chunks of width w bytes.
+// SplitStream cuts up an input stream r into smaller chunks of width w bytes.
 // bufSize specifies the length of the underlying buffered channel that holds
 // the chunks as they are created.
-// ProcessStream immediately returns a *Sequence before it finishes reading
+// SplitStream immediately returns a *Sequence before it finishes reading
 // from r.
 // The caller can then access the chunks as they arrive by iterating using Next.
-func ProcessStream(r io.Reader, w int64, bufSize int, timeout time.Duration) *Sequence {
+func SplitStream(r io.Reader, w int64, bufSize int, timeout time.Duration) *Sequence {
 	if w < 1 || bufSize < 0 || r == nil {
 		return nil
 	}

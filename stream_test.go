@@ -21,7 +21,7 @@ func TestStream(t *testing.T) {
 	assert.Nil(t, err)
 	defer f.Close()
 
-	s := ProcessStream(f, 30, 2, 1*time.Second)
+	s := SplitStream(f, 30, 2, 1*time.Second)
 	assert.NotNil(t, s)
 
 	// 1
@@ -73,7 +73,7 @@ func TestEdgeCases(t *testing.T) {
 	assert.Nil(t, err)
 	defer f.Close()
 
-	s := ProcessStream(f, 43, 0, 1*time.Second)
+	s := SplitStream(f, 43, 0, 1*time.Second)
 	assert.NotNil(t, s)
 
 	fin, _ := s.Err()
@@ -103,7 +103,7 @@ func TestEdgeCases(t *testing.T) {
 
 func TestTimeout(t *testing.T) {
 	pr, _ := dummyPipe()
-	s := ProcessStream(pr, 100, 100, 500*time.Millisecond)
+	s := SplitStream(pr, 100, 100, 500*time.Millisecond)
 
 	fin, _ := s.Err()
 	assert.False(t, fin)
@@ -121,7 +121,7 @@ func TestTimeout(t *testing.T) {
 
 func TestStreamError(t *testing.T) {
 	pr, pw := dummyPipe()
-	s := ProcessStream(pr, 10, 100, 100*time.Second)
+	s := SplitStream(pr, 10, 100, 100*time.Second)
 
 	fin, _ := s.Err()
 	assert.False(t, fin)
