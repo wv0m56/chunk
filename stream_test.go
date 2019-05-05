@@ -95,6 +95,10 @@ func TestEdgeCases(t *testing.T) {
 	fin, err = s.Err()
 	assert.True(t, fin)
 	assert.Nil(t, err)
+
+	sum224, err := s.Sum224()
+	assert.Nil(t, err)
+	assert.Equal(t, sha224bin("testdata/all"), sum224.String())
 }
 
 func TestTimeout(t *testing.T) {
