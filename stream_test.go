@@ -68,6 +68,35 @@ func TestStream(t *testing.T) {
 	assert.Nil(t, err)
 }
 
+func TestEdgeCases(t *testing.T) {
+	f, err := os.Open("testdata/all")
+	assert.Nil(t, err)
+	defer f.Close()
+
+	s := ProcessStream(f, 43, 0, 1*time.Second)
+	assert.NotNil(t, s)
+
+	fin, _ := s.Err()
+	assert.False(t, fin)
+
+	// 1
+	c := s.Next()
+	assert.Equal(t, sha224bin("testdata/3chunk-1"), c.Sum224().String())
+
+	// 2
+	c = s.Next()
+	assert.Equal(t, sha224bin("testdata/3chunk-2"), c.Sum224().String())
+
+	// 3
+	c = s.Next()
+	assert.Equal(t, sha224bin("testdata/3chunk-3"), c.Sum224().String())
+
+	assert.Nil(t, s.Next())
+	fin, err = s.Err()
+	assert.True(t, fin)
+	assert.Nil(t, err)
+}
+
 func TestTimeout(t *testing.T) {
 	pr, _ := dummyPipe()
 	s := ProcessStream(pr, 100, 100, 500*time.Millisecond)
