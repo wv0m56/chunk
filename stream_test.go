@@ -112,7 +112,9 @@ func TestEdgeCases(t *testing.T) {
 }
 
 func TestTimeout(t *testing.T) {
-	pr, _ := dummyPipe()
+	pr, pw := dummyPipe()
+	defer pr.Close()
+	defer pw.Close()
 	s := SplitStream(pr, 100, 100, 500*time.Millisecond)
 
 	fin, _ := s.Err()
@@ -131,6 +133,7 @@ func TestTimeout(t *testing.T) {
 
 func TestStreamError(t *testing.T) {
 	pr, pw := dummyPipe()
+	defer pr.Close()
 	s := SplitStream(pr, 10, 100, 100*time.Second)
 
 	fin, _ := s.Err()

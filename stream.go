@@ -1,6 +1,7 @@
 package chunk
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -16,12 +17,14 @@ var (
 )
 
 // Sequence represents a sliced up io.Reader into a sequence of smaller chunks.
+// It is thread safe.
 type Sequence struct {
 	c    chan *C
-	w    int64
-	h224 hash.Hash
+	w    int64     // read only
+	h224 hash.Hash // accessed from 1 goroutine sequentially
 
-	mu        sync.Mutex // guards below
+	// r/w
+	mu        sync.Mutex
 	fin       bool
 	err       error
 	chunks224 []hash.Hash
@@ -87,16 +90,21 @@ func (s *Sequence) doneWith(err error) {
 	s.mu.Unlock()
 }
 
-// SplitStream cuts up an input stream r into smaller chunks of width w bytes.
+// SplitStream cuts up an input stream rc into smaller chunks of width w bytes.
 // bufSize specifies the length of the underlying buffered channel that holds
 // the chunks as they are created.
 // SplitStream immediately returns a *Sequence before it finishes reading
-// from r.
+// from rc.
 // The caller can then access the chunks as they arrive by iterating using Next.
-func SplitStream(r io.Reader, w int64, bufSize int, timeout time.Duration) *Sequence {
-	if w < 1 || bufSize < 0 || r == nil {
+// rc will be closed upon completion, with or without error.
+// Check if the returned Sequence object is nil (invalid args) before proceeding,
+// which will be the case if w<1, bufSize<0, rc==nil, or timeout<1ms.
+func SplitStream(rc io.ReadCloser, w int64, bufSize int, timeout time.Duration) *Sequence {
+	if w < 1 || bufSize < 0 || rc == nil || timeout.Nanoseconds() < 1000*1000 {
 		return nil
 	}
+
+	br := bufio.NewReaderSize(rc, 1024*1024) // 1 MB buffer
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	s := &Sequence{
@@ -111,6 +119,7 @@ func SplitStream(r io.Reader, w int64, bufSize int, timeout time.Duration) *Sequ
 
 	go func() {
 		defer func() {
+			rc.Close()
 			close(s.c)
 			cancel()
 		}()
@@ -127,7 +136,7 @@ func SplitStream(r io.Reader, w int64, bufSize int, timeout time.Duration) *Sequ
 				h := sha256.New224()
 				mw := io.MultiWriter(s.h224, chunk, h)
 
-				n, err := io.CopyN(mw, r, w)
+				n, err := io.CopyN(mw, br, w)
 				if err != nil {
 					if err == io.EOF { // last chunk
 						if n > 0 {

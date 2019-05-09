@@ -1,17 +1,18 @@
 package chunk
 
-type byIndex []*indexedC
+// byReverseIndex implements sort.Interface (DESCENDING).
+type byReverseIndex []*indexedC
 
-func (bi byIndex) Len() int {
-	return len(bi)
+func (bri byReverseIndex) Len() int {
+	return len(bri)
 }
 
-func (bi byIndex) Less(i, j int) bool {
-	return bi[i].idx < bi[j].idx
+func (bri byReverseIndex) Less(i, j int) bool {
+	return bri[i].idx > bri[j].idx
 }
 
-func (bi byIndex) Swap(i, j int) {
-	bi[i], bi[j] = bi[j], bi[i]
+func (bri byReverseIndex) Swap(i, j int) {
+	bri[i], bri[j] = bri[j], bri[i]
 }
 
 type indexedC struct {

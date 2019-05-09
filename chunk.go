@@ -2,7 +2,10 @@ package chunk
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"hash"
+	"io"
+	"io/ioutil"
 )
 
 // C (for chunk) represents a fraction of the data resulting from slicing up
@@ -28,4 +31,17 @@ func (c *C) Sum224() Sum224 {
 	var res Sum224
 	copy(res[:], c.h224.Sum(nil))
 	return res
+}
+
+// NewChunk consumes r and creates a new C object of the consumed/buffered data.
+// Once created, the chunk is read-only.
+func NewChunk(r io.Reader) (*C, error) {
+	h := sha256.New224()
+	tr := io.TeeReader(r, h)
+
+	b, err := ioutil.ReadAll(tr)
+	if err != nil {
+		return nil, err
+	}
+	return &C{b, h}, nil
 }
