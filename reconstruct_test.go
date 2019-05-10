@@ -1,6 +1,7 @@
 package chunk
 
 import (
+	"bytes"
 	"os"
 	"testing"
 	"time"
@@ -36,27 +37,34 @@ func TestReconstructor(t *testing.T) {
 		Width:          30,
 	}
 
-	rec := Reconstruct(os.Stdout, m, 500*time.Millisecond)
+	out := noopCloseWriteCloser{bytes.NewBuffer(nil)}
+
+	rec := Reconstruct(out, m, 1000*time.Millisecond)
 	fin, _ := rec.Err()
 	assert.False(t, fin)
 
 	// out of order chunks
 	// 2
-	assert.Nil(t, rec.Submit(cFromFile(t, "testdata/chunk2")))
+	err = rec.Submit(cFromFile(t, "testdata/chunk2"))
+	assert.Nil(t, err)
 
 	// 4
-	assert.Nil(t, rec.Submit(cFromFile(t, "testdata/chunk4")))
+	err = rec.Submit(cFromFile(t, "testdata/chunk4"))
+	assert.Nil(t, err)
 
 	// 3
-	assert.Nil(t, rec.Submit(cFromFile(t, "testdata/chunk3")))
+	err = rec.Submit(cFromFile(t, "testdata/chunk3"))
+	assert.Nil(t, err)
 
 	// 1
-	assert.Nil(t, rec.Submit(cFromFile(t, "testdata/chunk1")))
+	err = rec.Submit(cFromFile(t, "testdata/chunk1"))
+	assert.Nil(t, err)
 
 	// 5
-	assert.Nil(t, rec.Submit(cFromFile(t, "testdata/chunk5")))
+	err = rec.Submit(cFromFile(t, "testdata/chunk5"))
+	assert.Nil(t, err)
 
-	time.Sleep(1000 * time.Millisecond) // wait for mutexes to resolve
+	time.Sleep(500 * time.Millisecond) // wait for mutexes, flushes to resolve
 	fin, err = rec.Err()
 	assert.Nil(t, err)
 	assert.True(t, fin)
@@ -65,6 +73,8 @@ func TestReconstructor(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, "6bcc3cb34fce8aeddf37c797df54ea04fe8a35363904463050dbfd87",
 		top224.String())
+	assert.Equal(t, "Package bytes implements functions for the manipulation of byte slices. It is analogous to the facilities of the strings package.",
+		out.String())
 }
 
 func cFromFile(t *testing.T, path string) *C {
@@ -74,4 +84,12 @@ func cFromFile(t *testing.T, path string) *C {
 	c, err := NewChunk(f)
 	assert.Nil(t, err)
 	return c
+}
+
+type noopCloseWriteCloser struct {
+	*bytes.Buffer
+}
+
+func (ncwc noopCloseWriteCloser) Close() error {
+	return nil
 }

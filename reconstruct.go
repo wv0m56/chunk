@@ -16,7 +16,7 @@ import (
 // reconstructed original whole data.
 // It is thread safe.
 type Reconstructor struct {
-	lastReceivedChunkIndex chan int
+	lastReceivedIndex chan int
 
 	// read-only's
 	checksumToIndex map[Sum224]int
@@ -43,28 +43,32 @@ func (rec *Reconstructor) Submit(c *C) error {
 	chunkHashRef := c.Sum224()
 	i, ok := rec.checksumToIndex[chunkHashRef]
 	if !ok {
-		return errors.New("chunk not registered in metadata")
+		return errNoChunkInMetadata
 	}
 
 	rec.mu.Lock()
-	defer rec.mu.Unlock()
 
 	if _, ok = rec.submittedChunkIndexes[i]; ok {
-		return errors.New("processed chunk submitted again")
+		rec.mu.Unlock()
+		return errResubmitSameChunk
 	}
 	ic := &indexedC{C{c.b, c.h224}, i}
 
 	if rec.fin {
-		return errors.New("finished reconstructor")
+		rec.mu.Unlock()
+		return errFinishedReconstructor
 	}
 
 	rec.sorter = append(rec.sorter, ic)
 	sort.Sort(rec.sorter)
 	rec.submittedChunkIndexes[i] = struct{}{}
 
-	go func() {
-		rec.lastReceivedChunkIndex <- i
-	}()
+	rec.mu.Unlock()
+
+	rec.lastReceivedIndex <- i
+	if i+1 == len(rec.m.ChunkChecksums) {
+		close(rec.lastReceivedIndex)
+	}
 
 	return nil
 }
@@ -76,7 +80,7 @@ func (rec *Reconstructor) Sum224() (Sum224, error) {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
 	if !rec.fin {
-		return Sum224{}, errInputStreamStillRunning
+		return Sum224{}, errStreamStillRunning
 	}
 	var res Sum224
 	copy(res[:], rec.h224.Sum(nil))
@@ -97,7 +101,15 @@ func (rec *Reconstructor) Err() (finished bool, err error) {
 // Reconstruct returns a Reconstructor object based on the info in m.
 // Every chunk sunk (in any order) into the returned Reconstructor will be
 // written to w in order.
+// Non-sensical arg yields nil returned Reconstructor.
 func Reconstruct(wc io.WriteCloser, m *Metadata, timeout time.Duration) *Reconstructor {
+	if len(m.ChunkChecksums) < 1 {
+		return nil
+	}
+	if m.TopChecksum == (Sum224{}) {
+		return nil
+	}
+
 	rec := &Reconstructor{
 		make(chan int),
 		make(map[Sum224]int),
@@ -117,29 +129,33 @@ func Reconstruct(wc io.WriteCloser, m *Metadata, timeout time.Duration) *Reconst
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 
 	go func() {
+		bw := bufio.NewWriterSize(wc, writeBufferSize)
 		defer func() {
+			rec.doneWith(bw.Flush())
 			wc.Close()
-			close(rec.lastReceivedChunkIndex)
 			cancel()
 		}()
 
-		bw := bufio.NewWriterSize(wc, 1024*1024) // 1MB
+		nextIndex := 0
+		for {
 
-		for nextIndex := 0; nextIndex < len(rec.m.ChunkChecksums); nextIndex++ {
 			select {
 
 			case <-ctx.Done():
 				rec.doneWith(ctx.Err())
 				return
 
-			case i := <-rec.lastReceivedChunkIndex:
+			case i := <-rec.lastReceivedIndex:
+				if nextIndex == len(rec.m.ChunkChecksums) {
+					return
+				}
 
-				if i == nextIndex {
+				if nextIndex == i {
 
 					rec.mu.Lock()
-					for j := i; len(rec.sorter) > 0 && j == rec.sorter[len(rec.sorter)-1].idx; j++ {
-						c := rec.sorter[len(rec.sorter)-1]
-						rec.sorter = rec.sorter[:len(rec.sorter)-1]
+					for len(rec.sorter) > 0 && nextIndex == rec.sorter[len(rec.sorter)-1].idx {
+						var c *indexedC
+						c, rec.sorter = pop(rec.sorter)
 						h := sha256.New224()
 						mw := io.MultiWriter(bw, h, rec.h224)
 						_, err := io.Copy(mw, c.Reader())
@@ -152,23 +168,31 @@ func Reconstruct(wc io.WriteCloser, m *Metadata, timeout time.Duration) *Reconst
 
 						// hash check
 						if !c.IsHash(h.Sum(nil)) {
-							rec.err = errors.New("chunk checksum error")
+							rec.err = errChunkChecksum
 							rec.fin = true
 							rec.mu.Unlock()
 							return
 						}
+
+						nextIndex++
 					}
 					rec.mu.Unlock()
 				}
 			}
 		}
-
-		rec.doneWith(nil)
-
-		return
 	}()
 
 	return rec
+}
+
+// assume external locking
+func pop(s byReverseIndex) (*indexedC, byReverseIndex) {
+	if len(s) == 0 {
+		return nil, s
+	}
+	c := s[len(s)-1]
+	s = s[:len(s)-1]
+	return c, s
 }
 
 func (rec *Reconstructor) doneWith(err error) {
@@ -176,4 +200,5 @@ func (rec *Reconstructor) doneWith(err error) {
 	rec.fin = true
 	rec.err = err
 	rec.mu.Unlock()
+	return
 }

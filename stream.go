@@ -5,15 +5,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"errors"
 	"hash"
 	"io"
 	"sync"
 	"time"
-)
-
-var (
-	errInputStreamStillRunning = errors.New("input stream still running")
 )
 
 // Sequence represents a sliced up io.Reader into a sequence of smaller chunks.
@@ -43,7 +38,7 @@ func (s *Sequence) Sum224() (Sum224, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.fin {
-		return Sum224{}, errInputStreamStillRunning
+		return Sum224{}, errStreamStillRunning
 	}
 	var res Sum224
 	copy(res[:], s.h224.Sum(nil))
@@ -57,7 +52,7 @@ func (s *Sequence) Metadata() (*Metadata, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.fin {
-		return nil, errInputStreamStillRunning
+		return nil, errStreamStillRunning
 	}
 
 	m := &Metadata{}
@@ -104,7 +99,7 @@ func SplitStream(rc io.ReadCloser, w int64, bufSize int, timeout time.Duration) 
 		return nil
 	}
 
-	br := bufio.NewReaderSize(rc, 1024*1024) // 1 MB buffer
+	br := bufio.NewReaderSize(rc, readBufferSize) // 1 MB buffer
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	s := &Sequence{
