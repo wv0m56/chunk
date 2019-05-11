@@ -18,50 +18,43 @@ type Reconstructor struct {
 	lastReceivedIndex chan int
 
 	// read-only's
-	checksumToIndex map[Sum224]int
-	chunkHashes     []Sum224
-	h224            hash.Hash // accessed from 1 goroutine squentially
+	checksumToIndexes map[Sum224][]int
+	chunkHashes       []Sum224
 
-	// r/w
-	mu                    sync.Mutex
-	sorter                byReverseIndex
-	submittedChunkIndexes map[int]struct{}
-	fin                   bool
-	err                   error
+	reconstructor
 }
 
 // Submit sinks chunk c (in any order) for the purpose of reconstructing the
 // original file.
 // All chunks will be reordered by rec.
-// Submiting the same chunk more than once will yield an error.
+// Submiting the same chunk more than once does nothing.
 func (rec *Reconstructor) Submit(c *C) error {
 	chunkHashRef := c.Sum224()
-	i, ok := rec.checksumToIndex[chunkHashRef]
+	idxs, ok := rec.checksumToIndexes[chunkHashRef]
 	if !ok {
 		return errNoChunkInMetadata
 	}
 
 	rec.mu.Lock()
 
-	if _, ok = rec.submittedChunkIndexes[i]; ok {
-		rec.mu.Unlock()
-		return errResubmitSameChunk
-	}
-	ic := &indexedC{C{c.b, c.h224}, i}
-
 	if rec.fin {
 		rec.mu.Unlock()
 		return errFinishedReconstructor
 	}
 
-	rec.sorter = append(rec.sorter, ic)
+	var ics []*indexedC
+	for _, v := range idxs {
+		ics = append(ics, &indexedC{C{c.b, c.h224}, v})
+	}
+	rec.sorter = append(rec.sorter, ics...)
 	sort.Sort(rec.sorter)
-	rec.submittedChunkIndexes[i] = struct{}{}
 
 	rec.mu.Unlock()
 
-	rec.lastReceivedIndex <- i
-	if i+1 == len(rec.chunkHashes) {
+	for _, v := range idxs {
+		rec.lastReceivedIndex <- v
+	}
+	if idxs[len(idxs)-1]+1 == len(rec.chunkHashes) {
 		close(rec.lastReceivedIndex)
 	}
 
@@ -72,25 +65,14 @@ func (rec *Reconstructor) Submit(c *C) error {
 // If it is ongoing, an error is returned.
 // Otherwise, the SHA-224 checksum of the stream is returned with no error.
 func (rec *Reconstructor) Sum224() (Sum224, error) {
-	rec.mu.Lock()
-	defer rec.mu.Unlock()
-	if !rec.fin {
-		return Sum224{}, errStreamStillRunning
-	}
-	var res Sum224
-	copy(res[:], rec.h224.Sum(nil))
-	return res, nil
+	return rec.sum224()
 }
 
 // Err returns any error encountered when writing to the output stream
 // if finished==true.
 // If finished==false, err is undefined.
 func (rec *Reconstructor) Err() (finished bool, err error) {
-	rec.mu.Lock()
-	finished = rec.fin
-	err = rec.err
-	rec.mu.Unlock()
-	return
+	return rec.finErr()
 }
 
 // Reconstruct returns a Reconstructor object based on the info in m.
@@ -104,18 +86,24 @@ func Reconstruct(wc io.WriteCloser, chunkHashes []Sum224, timeout time.Duration)
 
 	rec := &Reconstructor{
 		make(chan int),
-		make(map[Sum224]int),
+		make(map[Sum224][]int),
 		chunkHashes,
-		sha256.New224(),
-		sync.Mutex{},
-		[]*indexedC{},
-		make(map[int]struct{}),
-		false,
-		nil,
+		reconstructor{
+			sync.Mutex{},
+			sha256.New224(),
+			[]*indexedC{},
+			false,
+			nil,
+		},
 	}
 
 	for i, v := range chunkHashes {
-		rec.checksumToIndex[v] = i
+		rec.checksumToIndexes[v] = append(rec.checksumToIndexes[v], i)
+	}
+	for _, v := range rec.checksumToIndexes {
+		if len(v) > 1 {
+			sort.Ints(v)
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -187,10 +175,37 @@ func pop(s byReverseIndex) (*indexedC, byReverseIndex) {
 	return c, s
 }
 
-func (rec *Reconstructor) doneWith(err error) {
+type reconstructor struct {
+	mu     sync.Mutex
+	h224   hash.Hash
+	sorter byReverseIndex
+	fin    bool
+	err    error
+}
+
+func (rec *reconstructor) doneWith(err error) {
 	rec.mu.Lock()
 	rec.fin = true
 	rec.err = err
 	rec.mu.Unlock()
 	return
+}
+
+func (rec *reconstructor) finErr() (finished bool, err error) {
+	rec.mu.Lock()
+	finished = rec.fin
+	err = rec.err
+	rec.mu.Unlock()
+	return
+}
+
+func (rec *reconstructor) sum224() (Sum224, error) {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if !rec.fin {
+		return Sum224{}, errStreamStillRunning
+	}
+	var res Sum224
+	copy(res[:], rec.h224.Sum(nil))
+	return res, nil
 }

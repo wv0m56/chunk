@@ -62,7 +62,7 @@ func TestReconstructor(t *testing.T) {
 	err = rec.Submit(cFromFile(t, "testdata/chunk5"))
 	assert.Nil(t, err)
 
-	time.Sleep(500 * time.Millisecond) // wait for mutexes, flushes to resolve
+	time.Sleep(200 * time.Millisecond) // wait for mutexes, flushes to resolve
 	fin, err = rec.Err()
 	assert.Nil(t, err)
 	assert.True(t, fin)
