@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
-	"errors"
 	"hash"
 	"io"
 	"sort"
@@ -20,7 +19,7 @@ type Reconstructor struct {
 
 	// read-only's
 	checksumToIndex map[Sum224]int
-	m               *Metadata
+	chunkHashes     []Sum224
 	h224            hash.Hash // accessed from 1 goroutine squentially
 
 	// r/w
@@ -36,10 +35,6 @@ type Reconstructor struct {
 // All chunks will be reordered by rec.
 // Submiting the same chunk more than once will yield an error.
 func (rec *Reconstructor) Submit(c *C) error {
-	if int64(len(c.b)) > rec.m.Width {
-		return errors.New("chunk has incorrect width")
-	}
-
 	chunkHashRef := c.Sum224()
 	i, ok := rec.checksumToIndex[chunkHashRef]
 	if !ok {
@@ -66,7 +61,7 @@ func (rec *Reconstructor) Submit(c *C) error {
 	rec.mu.Unlock()
 
 	rec.lastReceivedIndex <- i
-	if i+1 == len(rec.m.ChunkChecksums) {
+	if i+1 == len(rec.chunkHashes) {
 		close(rec.lastReceivedIndex)
 	}
 
@@ -101,19 +96,16 @@ func (rec *Reconstructor) Err() (finished bool, err error) {
 // Reconstruct returns a Reconstructor object based on the info in m.
 // Every chunk sunk (in any order) into the returned Reconstructor will be
 // written to w in order.
-// Non-sensical arg yields nil returned Reconstructor.
-func Reconstruct(wc io.WriteCloser, m *Metadata, timeout time.Duration) *Reconstructor {
-	if len(m.ChunkChecksums) < 1 {
-		return nil
-	}
-	if m.TopChecksum == (Sum224{}) {
+// The returned Reconstructor is nil if chunkHashes has 0 length.
+func Reconstruct(wc io.WriteCloser, chunkHashes []Sum224, timeout time.Duration) *Reconstructor {
+	if len(chunkHashes) < 1 {
 		return nil
 	}
 
 	rec := &Reconstructor{
 		make(chan int),
 		make(map[Sum224]int),
-		m,
+		chunkHashes,
 		sha256.New224(),
 		sync.Mutex{},
 		[]*indexedC{},
@@ -122,7 +114,7 @@ func Reconstruct(wc io.WriteCloser, m *Metadata, timeout time.Duration) *Reconst
 		nil,
 	}
 
-	for i, v := range m.ChunkChecksums {
+	for i, v := range chunkHashes {
 		rec.checksumToIndex[v] = i
 	}
 
@@ -146,7 +138,7 @@ func Reconstruct(wc io.WriteCloser, m *Metadata, timeout time.Duration) *Reconst
 				return
 
 			case i := <-rec.lastReceivedIndex:
-				if nextIndex == len(rec.m.ChunkChecksums) {
+				if nextIndex == len(rec.chunkHashes) {
 					return
 				}
 

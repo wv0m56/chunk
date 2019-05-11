@@ -31,15 +31,13 @@ func TestReconstructor(t *testing.T) {
 	c5sum, err := NewSum224("fcbd8149fb4c6fcb49770ae28e5720e2f7e74e7bc60989829ccf68d6")
 	assert.Nil(t, err)
 
-	m := &Metadata{
-		TopChecksum:    top224,
-		ChunkChecksums: []Sum224{c1sum, c2sum, c3sum, c4sum, c5sum},
-		Width:          30,
-	}
-
 	out := noopCloseWriteCloser{bytes.NewBuffer(nil)}
 
-	rec := Reconstruct(out, m, 1000*time.Millisecond)
+	rec := Reconstruct(
+		out,
+		[]Sum224{c1sum, c2sum, c3sum, c4sum, c5sum},
+		1000*time.Millisecond,
+	)
 	fin, _ := rec.Err()
 	assert.False(t, fin)
 
