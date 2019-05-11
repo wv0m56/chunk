@@ -30,6 +30,7 @@ type Reconstructor struct {
 // Submiting the same chunk more than once does nothing.
 func (rec *Reconstructor) Submit(c *C) error {
 	chunkHashRef := c.Sum224()
+
 	idxs, ok := rec.checksumToIndexes[chunkHashRef]
 	if !ok {
 		return errNoChunkInMetadata
@@ -37,10 +38,17 @@ func (rec *Reconstructor) Submit(c *C) error {
 
 	rec.mu.Lock()
 
+	if _, ok := rec.submittedChunks[chunkHashRef]; ok {
+		rec.mu.Unlock()
+		return nil
+	}
+
 	if rec.fin {
 		rec.mu.Unlock()
 		return errFinishedReconstructor
 	}
+
+	rec.submittedChunks[chunkHashRef] = struct{}{}
 
 	var ics []*indexedC
 	for _, v := range idxs {
@@ -51,9 +59,8 @@ func (rec *Reconstructor) Submit(c *C) error {
 
 	rec.mu.Unlock()
 
-	for _, v := range idxs {
-		rec.lastReceivedIndex <- v
-	}
+	rec.lastReceivedIndex <- idxs[0]
+
 	if idxs[len(idxs)-1]+1 == len(rec.chunkHashes) {
 		close(rec.lastReceivedIndex)
 	}
@@ -90,6 +97,7 @@ func Reconstruct(wc io.WriteCloser, chunkHashes []Sum224, timeout time.Duration)
 		chunkHashes,
 		reconstructor{
 			sync.Mutex{},
+			make(map[Sum224]struct{}),
 			sha256.New224(),
 			[]*indexedC{},
 			false,
@@ -176,11 +184,12 @@ func pop(s byReverseIndex) (*indexedC, byReverseIndex) {
 }
 
 type reconstructor struct {
-	mu     sync.Mutex
-	h224   hash.Hash
-	sorter byReverseIndex
-	fin    bool
-	err    error
+	mu              sync.Mutex
+	submittedChunks map[Sum224]struct{}
+	h224            hash.Hash
+	sorter          byReverseIndex
+	fin             bool
+	err             error
 }
 
 func (rec *reconstructor) doneWith(err error) {

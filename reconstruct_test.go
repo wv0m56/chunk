@@ -17,9 +17,6 @@ import (
 // fcbd8149fb4c6fcb49770ae28e5720e2f7e74e7bc60989829ccf68d6  chunk5
 
 func TestReconstructor(t *testing.T) {
-	top224, err := NewSum224("6bcc3cb34fce8aeddf37c797df54ea04fe8a35363904463050dbfd87")
-	assert.Nil(t, err)
-
 	c1sum, err := NewSum224("d0b4d664a97100ce9fd81a8ddd0051b80dfdbdcefb0d98a56231909d")
 	assert.Nil(t, err)
 	c2sum, err := NewSum224("0a159b778546794379682eef59eb6cec6da039dc9222e4c65660f98e")
@@ -67,11 +64,41 @@ func TestReconstructor(t *testing.T) {
 	assert.Nil(t, err)
 	assert.True(t, fin)
 
-	top224, err = rec.Sum224()
+	top224, err := rec.Sum224()
 	assert.Nil(t, err)
 	assert.Equal(t, "6bcc3cb34fce8aeddf37c797df54ea04fe8a35363904463050dbfd87",
 		top224.String())
 	assert.Equal(t, "Package bytes implements functions for the manipulation of byte slices. It is analogous to the facilities of the strings package.",
+		out.String())
+}
+
+// 478745e3d663ce49a06aa6a897f5369bc575f380a0a954459d48a517  repeated
+// 773b42e98a8b235ccccaf49d7dd41943cfb57638ded6ab08aef19f52  repeated-chunk
+func TestReconstructRepeatedData(t *testing.T) {
+	chunkSum, err := NewSum224("773b42e98a8b235ccccaf49d7dd41943cfb57638ded6ab08aef19f52")
+	assert.Nil(t, err)
+
+	out := noopCloseWriteCloser{bytes.NewBuffer(nil)}
+	rec := Reconstruct(
+		out,
+		[]Sum224{chunkSum, chunkSum, chunkSum},
+		1000*time.Millisecond,
+	)
+
+	err = rec.Submit(cFromFile(t, "testdata/repeated-chunk"))
+	assert.Nil(t, err)
+
+	time.Sleep(100 * time.Millisecond)
+	err = rec.Submit(cFromFile(t, "testdata/repeated-chunk"))
+	assert.Nil(t, err)
+
+	time.Sleep(200 * time.Millisecond) // wait for mutexes, flushes to resolve
+
+	top224, err := rec.Sum224()
+	assert.Nil(t, err)
+	assert.Equal(t, "478745e3d663ce49a06aa6a897f5369bc575f380a0a954459d48a517",
+		top224.String())
+	assert.Equal(t, "This is repeated dataThis is repeated dataThis is repeated data",
 		out.String())
 }
 
