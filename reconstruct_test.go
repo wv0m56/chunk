@@ -3,6 +3,7 @@ package chunk
 import (
 	"bytes"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,7 +29,7 @@ func TestReconstructor(t *testing.T) {
 	c5sum, err := NewSum224("fcbd8149fb4c6fcb49770ae28e5720e2f7e74e7bc60989829ccf68d6")
 	assert.Nil(t, err)
 
-	out := noopCloseWriteCloser{bytes.NewBuffer(nil)}
+	out := noopCloseWriteCloser{bytes.NewBuffer(nil), &sync.Mutex{}}
 
 	rec := Reconstruct(
 		out,
@@ -78,7 +79,7 @@ func TestReconstructRepeatedData(t *testing.T) {
 	chunkSum, err := NewSum224("773b42e98a8b235ccccaf49d7dd41943cfb57638ded6ab08aef19f52")
 	assert.Nil(t, err)
 
-	out := noopCloseWriteCloser{bytes.NewBuffer(nil)}
+	out := noopCloseWriteCloser{bytes.NewBuffer(nil), &sync.Mutex{}}
 	rec := Reconstruct(
 		out,
 		[]Sum224{chunkSum, chunkSum, chunkSum},
@@ -113,8 +114,23 @@ func cFromFile(t *testing.T, path string) *C {
 
 type noopCloseWriteCloser struct {
 	*bytes.Buffer
+	*sync.Mutex
 }
 
 func (ncwc noopCloseWriteCloser) Close() error {
 	return nil
+}
+
+// avoid race in tests
+func (ncwc noopCloseWriteCloser) Write(b []byte) (int, error) {
+	ncwc.Lock()
+	defer ncwc.Unlock()
+	return ncwc.Buffer.Write(b)
+}
+
+// avoid race in tests
+func (ncwc noopCloseWriteCloser) String() string {
+	ncwc.Lock()
+	defer ncwc.Unlock()
+	return ncwc.Buffer.String()
 }

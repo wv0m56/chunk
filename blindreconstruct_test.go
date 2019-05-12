@@ -2,6 +2,7 @@ package chunk
 
 import (
 	"bytes"
+	"sync"
 	"testing"
 	"time"
 
@@ -9,7 +10,7 @@ import (
 )
 
 func TestBlindRecEarlyClose(t *testing.T) {
-	out := noopCloseWriteCloser{bytes.NewBuffer(nil)}
+	out := noopCloseWriteCloser{bytes.NewBuffer(nil), &sync.Mutex{}}
 	br := BlindReconstruct(out, 1*time.Second)
 
 	err := br.Submit(cFromFile(t, "testdata/chunk2"), 1)
@@ -28,7 +29,7 @@ func TestBlindRecEarlyClose(t *testing.T) {
 }
 
 func TestBlindReconstructor(t *testing.T) {
-	out := noopCloseWriteCloser{bytes.NewBuffer(nil)}
+	out := noopCloseWriteCloser{bytes.NewBuffer(nil), &sync.Mutex{}}
 	br := BlindReconstruct(out, 1*time.Second)
 
 	fin, _ := br.Err()
