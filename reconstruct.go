@@ -144,26 +144,13 @@ func Reconstruct(wc io.WriteCloser, chunkHashes []Sum224, timeout time.Duration)
 
 					rec.mu.Lock()
 					for len(rec.sorter) > 0 && nextIndex == rec.sorter[len(rec.sorter)-1].idx {
-						var c *indexedC
-						c, rec.sorter = pop(rec.sorter)
-						h := sha256.New224()
-						mw := io.MultiWriter(bw, h, rec.h224)
-						_, err := io.Copy(mw, c.Reader())
+						err := rec.writeChunk(bw)
 						if err != nil {
 							rec.err = err
 							rec.fin = true
 							rec.mu.Unlock()
 							return
 						}
-
-						// hash check
-						if !c.IsHash(h.Sum(nil)) {
-							rec.err = errChunkChecksum
-							rec.fin = true
-							rec.mu.Unlock()
-							return
-						}
-
 						nextIndex++
 					}
 					rec.mu.Unlock()
@@ -175,7 +162,7 @@ func Reconstruct(wc io.WriteCloser, chunkHashes []Sum224, timeout time.Duration)
 	return rec
 }
 
-// assume external locking
+// assume external lock
 func pop(s byReverseIndex) (*indexedC, byReverseIndex) {
 	if len(s) == 0 {
 		return nil, s
@@ -219,4 +206,23 @@ func (rec *reconstructor) sum224() (Sum224, error) {
 	var res Sum224
 	copy(res[:], rec.h224.Sum(nil))
 	return res, nil
+}
+
+// assume external lock
+func (rec *reconstructor) writeChunk(w io.Writer) error {
+	var c *indexedC
+	c, rec.sorter = pop(rec.sorter)
+	h := sha256.New224()
+	mw := io.MultiWriter(w, h, rec.h224)
+	_, err := io.Copy(mw, c.Reader())
+	if err != nil {
+		return err
+	}
+
+	// hash check
+	if !c.IsHash(h.Sum(nil)) {
+		return err
+	}
+
+	return nil
 }
