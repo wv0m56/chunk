@@ -15,13 +15,28 @@ import (
 // reconstructed original whole data.
 // It is thread safe.
 type Reconstructor struct {
-	lastReceivedIndex chan int
-
 	// read-only's
 	checksumToIndexes map[Sum224][]int
 	chunkHashes       []Sum224
 
+	// r/w, mutex inside embed
+	submittedChunks map[Sum224]struct{}
+
 	reconstructor
+}
+
+// Sum224 checks whether the streaming of chunks to the output stream is finished.
+// If it is ongoing, an error is returned.
+// Otherwise, the SHA-224 checksum of the stream is returned with no error.
+func (rec *Reconstructor) Sum224() (Sum224, error) {
+	return rec.sum224()
+}
+
+// Err returns any error encountered when writing to the output stream
+// if finished==true.
+// If finished==false, err is undefined.
+func (rec *Reconstructor) Err() (finished bool, err error) {
+	return rec.finErr()
 }
 
 // Submit sinks chunk c (in any order) for the purpose of reconstructing the
@@ -68,20 +83,6 @@ func (rec *Reconstructor) Submit(c *C) error {
 	return nil
 }
 
-// Sum224 checks whether the streaming of chunks to the output stream is finished.
-// If it is ongoing, an error is returned.
-// Otherwise, the SHA-224 checksum of the stream is returned with no error.
-func (rec *Reconstructor) Sum224() (Sum224, error) {
-	return rec.sum224()
-}
-
-// Err returns any error encountered when writing to the output stream
-// if finished==true.
-// If finished==false, err is undefined.
-func (rec *Reconstructor) Err() (finished bool, err error) {
-	return rec.finErr()
-}
-
 // Reconstruct returns a Reconstructor object based on the info in m.
 // Every chunk sunk (in any order) into the returned Reconstructor will be
 // written to w in order.
@@ -92,12 +93,12 @@ func Reconstruct(wc io.WriteCloser, chunkHashes []Sum224, timeout time.Duration)
 	}
 
 	rec := &Reconstructor{
-		make(chan int),
 		make(map[Sum224][]int),
 		chunkHashes,
+		make(map[Sum224]struct{}),
 		reconstructor{
+			make(chan int),
 			sync.Mutex{},
-			make(map[Sum224]struct{}),
 			sha256.New224(),
 			[]*indexedC{},
 			false,
@@ -119,7 +120,7 @@ func Reconstruct(wc io.WriteCloser, chunkHashes []Sum224, timeout time.Duration)
 	go func() {
 		bw := bufio.NewWriterSize(wc, writeBufferSize)
 		defer func() {
-			rec.doneWith(bw.Flush())
+			bw.Flush()
 			wc.Close()
 			cancel()
 		}()
@@ -135,6 +136,7 @@ func Reconstruct(wc io.WriteCloser, chunkHashes []Sum224, timeout time.Duration)
 
 			case i := <-rec.lastReceivedIndex:
 				if nextIndex == len(rec.chunkHashes) {
+					rec.doneWith(nil)
 					return
 				}
 
@@ -184,12 +186,12 @@ func pop(s byReverseIndex) (*indexedC, byReverseIndex) {
 }
 
 type reconstructor struct {
-	mu              sync.Mutex
-	submittedChunks map[Sum224]struct{}
-	h224            hash.Hash
-	sorter          byReverseIndex
-	fin             bool
-	err             error
+	lastReceivedIndex chan int
+	mu                sync.Mutex
+	h224              hash.Hash
+	sorter            byReverseIndex
+	fin               bool
+	err               error
 }
 
 func (rec *reconstructor) doneWith(err error) {
