@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"io"
 	"sort"
 	"sync"
@@ -70,15 +71,28 @@ func (br *BlindReconstructor) Submit(c *C, idx int) error {
 
 // Close closes and cleans up after br. Close signals the underlying writer to
 // be closed, but does not wait until it happens.
-func (br *BlindReconstructor) Close() error {
+func (br *BlindReconstructor) Close() (outErr error) {
+	defer func() {
+		if r := recover(); r != nil {
+			outErr = errors.New("attemping to close a closed br")
+		}
+	}()
 	br.closed <- struct{}{}
 	br.mu.Lock()
 	defer br.mu.Unlock()
 	if len(br.sorter) > 0 {
 		br.err = errUnprocessedChunksQueued
 	}
+	br.sorter = nil // deref all unprocessed chunks for gc
 	br.fin = true
 	return br.err
+}
+
+// NumSubmit returns the number of submitted chunks.
+func (br *BlindReconstructor) NumSubmit() int {
+	br.mu.Lock()
+	defer br.mu.Unlock()
+	return len(br.submittedIndexes)
 }
 
 // BlindReconstruct is similar to Reconstruct() without the aid of metadata
@@ -108,6 +122,7 @@ func BlindReconstruct(wc io.WriteCloser, timeout time.Duration) *BlindReconstruc
 			bw.Flush()
 			wc.Close()
 			cancel()
+			close(br.closed)
 		}()
 
 		nextIndex := 0
